@@ -2,6 +2,7 @@ import logging
 from flask import current_app, jsonify
 import json
 import requests
+import os
 
 # from app.services.openai_service import generate_response
 import re
@@ -31,30 +32,31 @@ def generate_response(response):
 
 
 def send_message(data):
-    headers = {
-        "Content-type": "application/json",
-        "Authorization": f"Bearer {current_app.config['ACCESS_TOKEN']}",
-    }
-
-    url = f"https://graph.facebook.com/{current_app.config['VERSION']}/{current_app.config['PHONE_NUMBER_ID']}/messages"
-
     try:
-        response = requests.post(
-            url, data=data, headers=headers, timeout=10
-        )  # 10 seconds timeout as an example
-        response.raise_for_status()  # Raises an HTTPError if the HTTP request returned an unsuccessful status code
-    except requests.Timeout:
-        logging.error("Timeout occurred while sending message")
-        return jsonify({"status": "error", "message": "Request timed out"}), 408
-    except (
-        requests.RequestException
-    ) as e:  # This will catch any general request exception
-        logging.error(f"Request failed due to: {e}")
-        return jsonify({"status": "error", "message": "Failed to send message"}), 500
-    else:
-        # Process the response as normal
-        log_http_response(response)
-        return response
+        # For testing only - replace with your actual values
+        token = "your_whatsapp_token_here"
+        phone_number_id = "your_phone_number_id_here"
+
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        url = f"https://graph.facebook.com/v18.0/{phone_number_id}/messages"
+
+        response = requests.post(url, json=data, headers=headers)
+
+        if response.status_code != 200:
+            logging.error(
+                f"Request failed due to: {response.status_code} {response.reason} for url: {url}"
+            )
+            return None, response.status_code
+
+        return response.json(), None
+
+    except Exception as e:
+        logging.error(f"Error in send_message: {str(e)}")
+        return None, str(e)
 
 
 def process_text_for_whatsapp(text):
@@ -76,21 +78,23 @@ def process_text_for_whatsapp(text):
 
 
 def process_whatsapp_message(body):
-    wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
-    name = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
+    try:
+        wa_id = body["entry"][0]["changes"][0]["value"]["contacts"][0]["wa_id"]
+        name = body["entry"][0]["changes"][0]["value"]["contacts"][0]["profile"]["name"]
 
-    message = body["entry"][0]["changes"][0]["value"]["messages"][0]
-    message_body = message["text"]["body"]
+        message = body["entry"][0]["changes"][0]["value"]["messages"][0]
+        if "text" not in message:
+            logging.warning("Received non-text message type")
+            return
 
-    # TODO: implement custom function here
-    response = generate_response(message_body)
+        message_body = message["text"]["body"]
 
-    # OpenAI Integration
-    # response = generate_response(message_body, wa_id, name)
-    # response = process_text_for_whatsapp(response)
-
-    data = get_text_message_input(current_app.config["RECIPIENT_WAID"], response)
-    send_message(data)
+        response = generate_response(message_body)
+        data = get_text_message_input(wa_id, response)
+        send_message(data)
+    except (KeyError, IndexError) as e:
+        logging.error(f"Error processing WhatsApp message: {str(e)}")
+        raise
 
 
 def is_valid_whatsapp_message(body):
